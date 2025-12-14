@@ -1,0 +1,6 @@
+chromadb
+openai
+sentence-transformers
+google-api-python-client
+yt-dlp
+python-dotenv
