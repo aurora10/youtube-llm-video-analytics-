@@ -2,6 +2,10 @@ import json
 import re
 import os
 
+from logger import get_logger
+
+logger = get_logger("chunk_processor")
+
 # --- Configuration ---
 # The output folder
 OUTPUT_FOLDER = "OUTPUT"
@@ -62,7 +66,7 @@ def chunk_text(text: str, max_words: int, overlap_words: int) -> list[str]:
 
 # --- Main Processing Logic ---
 if __name__ == "__main__":
-    print("--- Chunk Processor ---")
+    logger.info("--- Chunk Processor ---")
     input_file_path = input("Enter the path to the input JSONL file: ").strip()
     
     # Remove quotes if the user dragged and dropped the file
@@ -72,23 +76,23 @@ if __name__ == "__main__":
         input_file_path = input_file_path[1:-1]
 
     if not os.path.exists(input_file_path):
-        print(f"Error: Input file not found at '{input_file_path}'")
+        logger.error("Input file not found at '%s'", input_file_path)
         exit()
 
     # Create OUTPUT folder if it doesn't exist
     if not os.path.exists(OUTPUT_FOLDER):
         os.makedirs(OUTPUT_FOLDER)
-        print(f"Created output directory: {OUTPUT_FOLDER}")
+        logger.info("Created output directory: %s", OUTPUT_FOLDER)
 
     # Construct output filename
     base_name = os.path.basename(input_file_path)
     output_filename = f"{base_name}_chunked.jsonl"
     output_file_path = os.path.join(OUTPUT_FOLDER, output_filename)
 
-    print(f"Starting chunking process...")
-    print(f"Input file: {input_file_path}")
-    print(f"Output file: {output_file_path}")
-    print(f"Chunk size: ~{MAX_WORDS_PER_CHUNK} words, Overlap: {OVERLAP_WORDS} words")
+    logger.info("Starting chunking process...")
+    logger.info("Input file: %s", input_file_path)
+    logger.info("Output file: %s", output_file_path)
+    logger.info("Chunk size: ~%d words, Overlap: %d words", MAX_WORDS_PER_CHUNK, OVERLAP_WORDS)
 
     processed_lines = 0
     total_chunks_created = 0
@@ -131,11 +135,11 @@ if __name__ == "__main__":
                 processed_lines += 1
 
             except json.JSONDecodeError:
-                print(f"Warning: Skipping malformed JSON line: {line[:100]}...")
+                logger.warning("Skipping malformed JSON line: %.100s...", line)
                 continue
     
-    print("\n--- Chunking Summary ---")
-    print(f"Processed {processed_lines} original video transcripts.")
-    print(f"Created a total of {total_chunks_created} chunks.")
-    print(f"Chunked data saved to: {output_file_path}")
-    print("--------------------------")
+    logger.info("--- Chunking Summary ---")
+    logger.info("Processed %d original video transcripts.", processed_lines)
+    logger.info("Created a total of %d chunks.", total_chunks_created)
+    logger.info("Chunked data saved to: %s", output_file_path)
+    logger.info("--------------------------")

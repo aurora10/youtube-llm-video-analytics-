@@ -8,6 +8,10 @@ import argparse
 import re
 from dotenv import load_dotenv
 
+from logger import get_logger
+
+logger = get_logger("rag")
+
 # --- Configuration ---
 load_dotenv('.env.local')
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -16,31 +20,20 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = chromadb.PersistentClient(path="./chroma_db")
 
 # Initialize the embedding model
-print("Loading embedding model (this may take a moment on first run)...")
+logger.info("Loading embedding model (this may take a moment on first run)...")
 embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-print("Embedding model loaded.")
+logger.info("Embedding model loaded.")
 
 # --- Initialize the LLM client using the hardcoded key ---
-### MODIFICATION HERE: We now pass the key directly to the client ###
-try:
-    if not OPENAI_API_KEY:
-        print("\n---FATAL ERROR---")
-        print("OpenAI API key is missing.")
-        print("Please check your .env.local file.")
-        exit()
-        
-    llm_client = openai.OpenAI(api_key=OPENAI_API_KEY)
-    # A simple check to see if the key is valid
-    llm_client.models.list() 
-    print("OpenAI client initialized successfully.")
-except openai.AuthenticationError:
-    print("\n---FATAL ERROR---")
-    print("The provided OpenAI API key is invalid or expired.")
-    print("Please check the key in the 'OPENAI_API_KEY' variable.")
-    exit()
-except Exception as e:
-    print(f"An unexpected error occurred while initializing the OpenAI client: {e}")
-    exit()
+llm_client = None
+if OPENAI_API_KEY:
+    try:
+        llm_client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        logger.info("OpenAI client initialized.")
+    except Exception as e:
+        logger.warning("Could not initialize OpenAI client: %s", e)
+else:
+    logger.warning("OPENAI_API_KEY is missing from .env.local")
 
 
 # --- Phase 1: Indexing Function ---
@@ -53,16 +46,16 @@ def build_or_load_index(chunked_jsonl_file: str, collection_name: str):
         collection = client.get_or_create_collection(name=collection_name)
         
         if collection.count() > 0:
-            print(f"Collection '{collection_name}' already loaded with {collection.count()} chunks. Ready to chat.")
+            logger.info("Collection '%s' already loaded with %d chunks. Ready to chat.", collection_name, collection.count())
             return collection
 
     except Exception as e:
-        print(f"Error connecting to ChromaDB or getting collection: {e}")
+        logger.error("Error connecting to ChromaDB or getting collection: %s", e)
         return None
 
-    print(f"Collection '{collection_name}' is empty. Indexing data from '{chunked_jsonl_file}'...")
+    logger.info("Collection '%s' is empty. Indexing data from '%s'...", collection_name, chunked_jsonl_file)
     if not os.path.exists(chunked_jsonl_file):
-        print(f"Error: Chunked data file not found at '{chunked_jsonl_file}'.")
+        logger.error("Chunked data file not found at '%s'.", chunked_jsonl_file)
         return None
 
     documents, metadatas, ids = [], [], []
@@ -74,17 +67,23 @@ def build_or_load_index(chunked_jsonl_file: str, collection_name: str):
             if not chunk_text: continue
 
             documents.append(chunk_text)
-            metadatas.append({"video_id": data.get("video_id"), "title": data.get("title"), "chunk_id": data.get("chunk_id"), "published_date": data.get("published_date")})
+            # Sanitize metadata: ChromaDB rejects None values; convert to empty string
+            metadatas.append({
+                "video_id": data.get("video_id") or "",
+                "title": data.get("title") or "",
+                "chunk_id": data.get("chunk_id", 0),
+                "published_date": data.get("published_date") or "",
+            })
             ids.append(f"{data.get('video_id')}_{data.get('chunk_id')}")
 
     if not documents:
-        print("No documents found to index.")
+        logger.info("No documents found to index.")
         return collection
 
-    print(f"Generating embeddings for {len(documents)} document chunks...")
+    logger.info("Generating embeddings for %d document chunks...", len(documents))
     embeddings = embedding_model.encode(documents, show_progress_bar=True).tolist()
 
-    print("Adding data to ChromaDB in batches...")
+    logger.info("Adding data to ChromaDB in batches...")
     batch_size = 100
     for i in range(0, len(documents), batch_size):
         collection.add(
@@ -94,7 +93,7 @@ def build_or_load_index(chunked_jsonl_file: str, collection_name: str):
             ids=ids[i:i+batch_size]
         )
 
-    print(f"Indexing complete. Total chunks indexed: {collection.count()}. Ready to chat.")
+    logger.info("Indexing complete. Total chunks indexed: %d. Ready to chat.", collection.count())
     return collection
 
 # --- Phase 2: Querying Function (Unchanged) ---
@@ -135,7 +134,7 @@ def query_rag_system(query: str, collection, k: int = 5):
     ANSWER:
     """
 
-    print("\n🤖 Thinking...")
+    logger.debug("Thinking...")
     try:
         response = llm_client.chat.completions.create(
             model="gpt-5-mini",
@@ -149,6 +148,7 @@ def query_rag_system(query: str, collection, k: int = 5):
         return final_answer, retrieved_metadatas
     except Exception as e:
         error_message = f"An error occurred while communicating with the LLM: {e}"
+        logger.error("LLM communication error: %s", e)
         return error_message, []
 
 
@@ -189,15 +189,15 @@ if __name__ == "__main__":
         if len(collection_name) < 3:
             collection_name = f"collection_{collection_name}".ljust(3, '_')
 
-        print(f"Auto-generated collection name: '{collection_name}'")
+        logger.info("Auto-generated collection name: '%s'", collection_name)
 
     collection = build_or_load_index(args.file, collection_name)
 
     if collection:
-        print("\n=======================================================")
-        print("    🔎 YouTube Transcript RAG System Initialized 🔎")
-        print("=======================================================")
-        print(f"Corpus: {os.path.basename(args.file)}")
+        logger.info("=======================================================")
+        logger.info("    🔎 YouTube Transcript RAG System Initialized 🔎")
+        logger.info("=======================================================")
+        logger.info("Corpus: %s", os.path.basename(args.file))
         print("Ask a question about the indexed transcripts.")
         print("Type 'exit' or 'quit' to end the session.")
         
@@ -232,5 +232,5 @@ if __name__ == "__main__":
                 print("\n\n👋 Exiting program. Goodbye!")
                 break
             except Exception as e:
-                print(f"\nAn unexpected error occurred in the main loop: {e}")
+                logger.exception("Unexpected error in main loop")
                 break

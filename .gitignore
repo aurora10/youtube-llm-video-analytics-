@@ -26,6 +26,9 @@ myenv/
 .env
 .env.local
 
+# Logs
+logs/
+
 # Project Specific
 chroma_db/
 OUTPUT/

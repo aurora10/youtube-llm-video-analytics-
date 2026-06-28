@@ -1,6 +1,15 @@
 chromadb
 openai
-sentence-transformers
+torch==2.2.2
+transformers==4.44.0
+safetensors==0.4.3
+sentence-transformers==3.0.1
+numpy<2
+scipy<1.14
 google-api-python-client
 yt-dlp
+youtube-transcript-api
 python-dotenv
+fastapi
+uvicorn
+python-multipart
