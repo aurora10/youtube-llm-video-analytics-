@@ -96,7 +96,93 @@ def build_or_load_index(chunked_jsonl_file: str, collection_name: str):
     logger.info("Indexing complete. Total chunks indexed: %d. Ready to chat.", collection.count())
     return collection
 
-# --- Phase 2: Querying Function (Unchanged) ---
+# Relevance threshold for retrieved chunks.
+# ChromaDB returns squared-L2 distance over the (unit-normalized) MiniLM
+# embeddings. This collection is scoped to a SINGLE video, so every retrieved
+# chunk is legitimately on-topic; the embedding model is also weak on non-English
+# text, so even directly-relevant non-English questions score high (~1.9). We
+# therefore use this only as a LAST-RESORT guard against clearly-orthogonal
+# matches (distance near 2.0+ = near-zero cosine). Relevance is otherwise left to
+# the LLM grounding prompt ("use ONLY the context").
+RELEVANCE_THRESHOLD = 2.4
+
+# Lower temperature reduces hallucination when the context is weak.
+# NOTE: the configured model 'gpt-5-mini' rejects any value other than the
+# default (1) with a 400 ("Unsupported value: 'temperature'"). Keep it at 1 so
+# the model answers; the relevance threshold above is the real out-of-scope guard.
+LLM_TEMPERATURE = 1
+
+
+def suggest_questions(transcript_excerpt: str, count: int = 3) -> list[str]:
+    """Generate context-relevant question suggestions from a transcript excerpt.
+
+    Uses the configured LLM to produce questions a viewer would actually ask
+    about THIS video (in the transcript's language). Returns an EMPTY list on
+    any failure — the UI relies only on dynamically generated suggestions.
+    """
+    if not llm_client or not transcript_excerpt.strip():
+        return []
+
+    prompt = f"""You are analyzing a YouTube video transcript.
+
+Here is an excerpt of the transcript:
+\"\"\"
+{transcript_excerpt}
+\"\"\"
+
+Generate exactly {count} short, specific, useful questions that a viewer would ask about THIS video. Each question must be directly answerable from the transcript, and should reflect the actual topics covered in the video.
+
+Write the questions in the SAME language as the transcript excerpt (for example, if the transcript is in Russian, write them in Russian; if it is in Spanish, write them in Spanish; if it is in English, write them in English). Do not answer or translate the transcript — only produce questions.
+
+Return ONLY the {count} questions, one per line, with no numbering, no bullet points, no quotes, and no extra text or commentary."""
+
+    try:
+        response = llm_client.chat.completions.create(
+            model="gpt-5-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=LLM_TEMPERATURE,
+        )
+        raw = response.choices[0].message.content or ""
+        questions = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Strip leading numbering / bullets (e.g. "1.", "2)", "- ", "* ")
+            line = re.sub(r'^\s*(?:[\d\*\-•]+[.)]?\s*)+', '', line).strip()
+            if line:
+                questions.append(line)
+            if len(questions) >= count:
+                break
+        if len(questions) < count:
+            return []
+        return questions[:count]
+    except Exception as e:
+        logger.error("Suggest questions failed: %s", e)
+        return []
+
+# Meta-requests ("summarize / what is this video about / key points") don't embed
+# close to any single chunk, so a strict similarity threshold would reject them.
+# The collection is already scoped to ONE video, so for these intents the retrieved
+# chunks are legitimately in-scope — skip the relevance filter for them.
+SUMMARY_INTENT = [
+    'summarize', 'summarise', 'summary', 'overview', 'recap', 'tl;dr', 'tldr',
+    'key points', 'main points', 'main ideas', 'key takeaways', 'highlight',
+    'what is this about', 'what\'s this about', 'what is this video about',
+    'what\'s this video about', 'describe this video', 'give me a summary',
+    'points', 'gist', 'conclusion', 'bottom line', 'in short',
+    # common non-English variants
+    'суть', 'резюме', 'кратко', 'о чём это видео', 'о чем это видео',
+    'про що це відео', 'підсумуй', 'підсумувати', 'стисло',
+]
+
+
+def _is_summary_intent(query: str) -> bool:
+    """True when the user asks for a summary/overview rather than a specific fact."""
+    q = (query or '').lower()
+    return any(token in q for token in SUMMARY_INTENT)
+
+# --- Phase 2: Querying Function ---
 def query_rag_system(query: str, collection, k: int = 5):
     """
     Takes a user query, retrieves relevant context, and generates an answer.
@@ -110,12 +196,34 @@ def query_rag_system(query: str, collection, k: int = 5):
     
     retrieved_docs = results['documents'][0]
     retrieved_metadatas = results['metadatas'][0]
+    retrieved_distances = results.get('distances', [[]])[0]
 
     if not retrieved_docs:
         return "I could not find any relevant information in the video transcripts to answer your question.", []
-        
+
+    # Meta-requests ("summarize / what is this video about") don't embed close
+    # to any single chunk, so don't apply the strict similarity filter to them —
+    # the collection is scoped to one video, so the retrieved chunks are in-scope.
+    summary_request = _is_summary_intent(query)
+
+    # Keep only chunks that are actually relevant to the question.
+    if summary_request:
+        relevant_docs = retrieved_docs
+        relevant_metas = retrieved_metadatas
+    else:
+        relevant_docs, relevant_metas = [], []
+        for doc, meta, dist in zip(retrieved_docs, retrieved_metadatas, retrieved_distances):
+            if dist <= RELEVANCE_THRESHOLD:
+                relevant_docs.append(doc)
+                relevant_metas.append(meta)
+
+    # The question falls outside the transcript content. Answer directly instead
+    # of asking the LLM to ground an answer in irrelevant context.
+    if not relevant_docs:
+        return "I could not find any relevant information in the video transcripts to answer your question.", []
+
     context_str = ""
-    for i, (doc, meta) in enumerate(zip(retrieved_docs, retrieved_metadatas)):
+    for i, (doc, meta) in enumerate(zip(relevant_docs, relevant_metas)):
         context_str += f"Source {i+1} (Video ID: {meta.get('video_id', 'N/A')}, Title: {meta.get('title', 'N/A')}):\n"
         context_str += f'"{doc}"\n\n'
 
@@ -142,10 +250,10 @@ def query_rag_system(query: str, collection, k: int = 5):
                 {"role": "system", "content": "You are a helpful research assistant specialized in analyzing provided text."},
                 {"role": "user", "content": prompt_template}
             ],
-            temperature=1,
+            temperature=LLM_TEMPERATURE,
         )
         final_answer = response.choices[0].message.content
-        return final_answer, retrieved_metadatas
+        return final_answer, relevant_metas
     except Exception as e:
         error_message = f"An error occurred while communicating with the LLM: {e}"
         logger.error("LLM communication error: %s", e)

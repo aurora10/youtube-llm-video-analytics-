@@ -2,7 +2,7 @@
 # ============================================================
 #  YT Deep Search — one-command dev launcher
 #
-#  Starts the FastAPI backend and the Vite frontend together,
+#  Starts the FastAPI backend and the Next.js frontend together,
 #  waits for the backend to be ready, tees their logs, and
 #  stops BOTH cleanly when you press Ctrl+C.
 #
@@ -15,7 +15,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
 BACKEND_PORT=8000
-FRONTEND_PORT=5173
+FRONTEND_PORT=3000
 PYTHON="./myenv/bin/python"
 
 # ── colors ────────────────────────────────────────────────
@@ -34,9 +34,9 @@ if [ ! -x "$PYTHON" ]; then
   exit 1
 fi
 
-if [ ! -d "frontend/node_modules" ]; then
-  warn "frontend/node_modules not found. Running npm install..."
-  ( cd frontend && npm install ) || { err "npm install failed."; exit 1; }
+if [ ! -d "frontend/ui/node_modules" ]; then
+  warn "frontend/ui/node_modules not found. Running pnpm install..."
+  ( cd frontend/ui && pnpm install ) || { err "pnpm install failed."; exit 1; }
 fi
 
 # ── clear any stale processes on our ports ───────────────
@@ -62,8 +62,8 @@ BACKEND_PID=$!
 # ── launch frontend ───────────────────────────────────────
 info "Starting frontend →  http://localhost:$FRONTEND_PORT"
 (
-  cd frontend
-  exec npm run dev
+  cd frontend/ui
+  exec pnpm dev
 ) &
 FRONTEND_PID=$!
 

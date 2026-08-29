@@ -10,7 +10,7 @@ from typing import Optional, List
 # Import existing logic
 from LLM_ready_YT_DLP import search_videos, download_transcript_ytdlp, clean_filename, BASE_OUTPUT_FOLDER, generate_csv
 from chunk_processor import chunk_text, MAX_WORDS_PER_CHUNK, OVERLAP_WORDS, OUTPUT_FOLDER
-from rag_processor import build_or_load_index, query_rag_system, client as chroma_client
+from rag_processor import build_or_load_index, query_rag_system, suggest_questions, client as chroma_client
 
 from logger import get_logger
 
@@ -41,10 +41,30 @@ class ChatRequest(BaseModel):
     filename: str
     collection_name: Optional[str] = None
 
+class SuggestRequest(BaseModel):
+    filename: str
+    collection_name: Optional[str] = None
+    lang: str = "en"
+
 class AnalyzeRequest(BaseModel):
     video_id: str
     title: str = ""
     lang: str = "en"
+
+
+def _resolve_collection_name(filename: str, collection_name: Optional[str] = None) -> str:
+    """Return a valid ChromaDB collection name for a given chunked filename."""
+    if collection_name:
+        return collection_name
+    base_name = os.path.basename(filename)
+    name_without_ext = base_name.replace(".jsonl", "").replace("_chunked", "")
+    sanitized_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', name_without_ext)
+    sanitized_name = re.sub(r'^[^a-zA-Z0-9]+', '', sanitized_name)
+    sanitized_name = re.sub(r'[^a-zA-Z0-9]+$', '', sanitized_name)
+    collection_name = sanitized_name[:63]
+    if len(collection_name) < 3:
+        collection_name = f"collection_{collection_name}".ljust(3, '_')
+    return collection_name
 
 @app.get("/api/logs")
 async def get_logs(lines: int = Query(default=100, ge=1, le=5000)):
@@ -266,18 +286,7 @@ async def delete_video(filename: str):
 async def api_chat(req: ChatRequest):
     """Queries the RAG system."""
     try:
-        # Use explicit collection_name if provided, otherwise derive from filename
-        if req.collection_name:
-            collection_name = req.collection_name
-        else:
-            base_name = os.path.basename(req.filename)
-            name_without_ext = base_name.replace(".jsonl", "").replace("_chunked", "")
-            sanitized_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', name_without_ext)
-            sanitized_name = re.sub(r'^[^a-zA-Z0-9]+', '', sanitized_name)
-            sanitized_name = re.sub(r'[^a-zA-Z0-9]+$', '', sanitized_name)
-            collection_name = sanitized_name[:63]
-            if len(collection_name) < 3:
-                 collection_name = f"collection_{collection_name}".ljust(3, '_')
+        collection_name = _resolve_collection_name(req.filename, req.collection_name)
 
         collection = chroma_client.get_or_create_collection(name=collection_name)
         
@@ -303,6 +312,37 @@ async def api_chat(req: ChatRequest):
     except Exception as e:
         logger.exception("Chat failed: filename=%s, query='%s'", req.filename, req.query[:100])
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/suggest")
+async def api_suggest(req: SuggestRequest):
+    """Generates context-relevant question suggestions from the video transcript."""
+    try:
+        collection_name = _resolve_collection_name(req.filename, req.collection_name)
+        collection = chroma_client.get_or_create_collection(name=collection_name)
+
+        if collection.count() == 0:
+            filepath = os.path.join(OUTPUT_FOLDER, req.filename)
+            collection = build_or_load_index(filepath, collection_name)
+
+        if collection is None or collection.count() == 0:
+            logger.info("Suggest: no indexed transcript for '%s'; returning empty.", req.filename)
+            return {"suggestions": []}
+
+        # Pull a representative sample of the transcript for context-aware questions.
+        count = collection.count()
+        sample = collection.get(limit=min(count, 16), include=["documents"])
+        docs = sample.get("documents") or []
+        transcript_excerpt = "\n\n".join(docs[:12])
+        if len(transcript_excerpt) > 6000:
+            transcript_excerpt = transcript_excerpt[:6000]
+
+        suggestions = suggest_questions(transcript_excerpt)
+        logger.info("Suggest: filename=%s, suggestions=%d", req.filename, len(suggestions))
+        return {"suggestions": suggestions}
+    except Exception as e:
+        logger.exception("Suggest failed: filename=%s", req.filename)
+        return {"suggestions": []}
 
 if __name__ == "__main__":
     import uvicorn

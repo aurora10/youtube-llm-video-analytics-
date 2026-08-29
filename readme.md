@@ -14,72 +14,80 @@ The standard YouTube search engine prioritizes engagement and often limits the r
 
 ## ✨ Features
 
-- **Web UI** — Modern React frontend with a dark/neon theme for searching and chatting with video data.
+- **Modern Web UI** — A sleek, refined dark **Next.js** frontend for searching, analyzing, and chatting with video data.
+- **One-command launcher** — `./start.sh` boots both the backend and frontend together and stops both on `Ctrl+C`.
 - **REST API** — FastAPI backend handling search, transcript download, chunking, RAG indexing, and chat — all in one request.
 - **Advanced Search** — Filter by language, date range (days/weeks), and exact keywords.
 - **Transcript Extraction** — Downloads transcripts using `yt-dlp` (more reliable) or YouTube API.
-- **Smart Chunking** — Splits long transcripts into LLM-friendly chunks.
+- **Smart Chunking** — Splits long transcripts into LLM-friendly, overlapping chunks.
 - **RAG (Retrieval-Augmented Generation)** — Chat with your video data using OpenAI and ChromaDB.
-- **Automatic Indexing** — ChromaDB collection is built automatically after each search.
-- **Dataset Management** — Delete processed datasets and their indexes directly from the UI.
+- **Automatic Indexing** — A ChromaDB collection is built automatically after each analysis.
+- **Grounded answers** — The LLM answers only from the retrieved transcript context, so out-of-scope questions return a clear "not found" rather than a made-up answer. Summary-style questions ("summarize this video") are handled specially.
+- **Dataset Management** — Delete processed datasets and their ChromaDB indexes directly from the UI.
 - **CSV Export** — Automatically saves all found video URLs for easy access.
 
-## 🛠️ Installation
+## 🛠️ Setup
 
-### Backend
+### 1. Backend
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/aurora10/youtube-llm-video-analytics-.git
-   cd youtube-llm-video-analytics-
-   ```
+Create a virtual environment and install the Python dependencies. **Use `myenv` (Python 3.12)** — the older `venv/` (Python 3.9) contains incompatible package versions (a `transformers`/`tokenizers` mismatch) and will fail to start.
 
-2. **Install Python dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+python3 -m venv myenv
+./myenv/bin/pip install -r requirements.txt
+```
 
-3. **Set up Environment Variables:**
-   Create a `.env.local` file in the root directory and add your API keys:
-   ```env
-   YOUTUBE_API_KEY=your_youtube_api_key
-   OPENAI_API_KEY=your_openai_api_key
-   ```
+### 2. API keys
 
-### Frontend
+Create a `.env.local` file in the project root and add your keys:
 
-4. **Install Node.js dependencies:**
-   ```bash
-   cd frontend
-   npm install
-   ```
+```env
+YOUTUBE_API_KEY=your_youtube_api_key
+OPENAI_API_KEY=your_openai_api_key
+```
+
+> ⚠️ **Important (YouTube):** The **YouTube Data API v3** must be **enabled** for the Google Cloud project that owns the key, and the key must be valid (and ideally restricted to that API). If search returns *"No videos found from YouTube Search."*, the key is being rejected — see [Troubleshooting](#troubleshooting).
+
+### 3. Frontend
+
+```bash
+cd frontend/ui
+pnpm install
+```
 
 ## 🚀 How to Start the App
 
-You need to run both the backend and frontend servers simultaneously. Open two terminals:
-
-### Terminal 1 — Backend (FastAPI)
+### Method A (recommended) — one command
 
 ```bash
-python api.py
+./start.sh
 ```
 
-Starts the API server at **http://127.0.0.1:8000**.
+This starts the **backend** (`./myenv/bin/python api.py` on port 8000) and the **frontend** (`pnpm dev` in `frontend/ui` on port 3000) together, waits for the backend to be ready, and stops **both** when you press `Ctrl+C`. It also clears any stale processes already on ports 8000/3000 first.
 
-### Terminal 2 — Frontend (React + Vite)
+Open **http://localhost:3000** in your browser. All `/api` requests are proxied to the backend automatically via a Next.js API route handler (`frontend/ui/app/api/[...path]/route.ts`) with a 10-minute timeout, so long operations like Analyze don't get cut off.
+
+### Method B — two terminals
 
 ```bash
-cd frontend
-npm run dev
+# Terminal 1 — backend
+./myenv/bin/python api.py          # http://127.0.0.1:8000
+
+# Terminal 2 — frontend
+cd frontend/ui
+pnpm dev                           # http://localhost:3000
 ```
 
-Starts the dev server at **http://localhost:5173**.
+## 🔍 How the App Works
 
-### Open the App
+1. **Search** — `POST /api/search` uses the YouTube Data API to find videos for your keyword (filtered by language / date).
+2. **Analyze** — Clicking **Analyze** on a video calls `POST /api/analyze`, which downloads the transcript (via `yt-dlp` with several fallback strategies), chunks it, and indexes it into a per-video ChromaDB collection.
+3. **Chat** — `POST /api/chat` embeds your question, retrieves the most relevant chunks from that video's collection, and asks the LLM to answer **only from** those chunks (citing sources).
 
-Open your browser and go to **http://localhost:5173**. The frontend proxies all `/api` requests to the backend automatically (configured in `frontend/vite.config.js`).
-
-> **Note:** Keep both terminals running while using the app.
+### RAG & grounding notes
+- The relevance guard short-circuits clearly off-topic questions with *"I could not find any relevant information…"* instead of letting the model guess.
+- Summary / meta-questions ("summarize this video", "what is this video about?") bypass the strict distance filter, since the collection is scoped to a single video.
+- The OpenAI call uses the model **`gpt-5-mini`** — confirm it is valid for your OpenAI account (note: this model only supports `temperature=1`).
 
 ## 📖 CLI Usage Workflow
 
@@ -98,8 +106,8 @@ python LLM_ready_YT_DLP.py -k "депорт украинцев из сша" -l "
 
 **Arguments:**
 - `-k`: Search keyword (required)
-- `-l`: Language code (default: "en")
-- `-m`: Max videos to process (default: 50)
+- `-l`: Language code (default: `"en"`)
+- `-m`: Max videos to process (default: `50`)
 - `-w`: Weeks back to search
 - `-d`: Days back to search
 
@@ -115,8 +123,7 @@ python chunk_processor.py
 ```
 *The script will prompt you for the input file path (e.g., `llm_data/your_file.jsonl`).*
 
-**Output:**
-- A chunked JSONL file in the `OUTPUT/` directory.
+**Output:** a chunked JSONL file in the `OUTPUT/` directory.
 
 ### Step 3: Chat with Data (RAG)
 Use the RAG processor to chat with your video data.
@@ -124,22 +131,30 @@ Use the RAG processor to chat with your video data.
 ```bash
 python rag_processor.py --file OUTPUT/your_file_chunked.jsonl
 ```
-
 *The script will automatically create/load a ChromaDB collection based on the filename.*
 
 ## 📂 File Structure
 
-- **`api.py`** — FastAPI backend with endpoints for search, chat, and dataset management.
+- **`start.sh`** — One-command launcher for the backend + frontend.
+- **`api.py`** — FastAPI backend with endpoints for search, analyze, chat, and dataset management.
 - **`LLM_ready_YT_DLP.py`** — Main script for searching and downloading transcripts (Recommended).
 - **`chunk_processor.py`** — Splits transcripts into smaller chunks for the LLM.
-- **`rag_processor.py`** — Indexes chunks into ChromaDB and handles the chat interface.
+- **`rag_processor.py`** — Indexes chunks into ChromaDB and handles the RAG chat/grounding logic.
 - **`LLM_ready.py`** — Legacy script using YouTube API for transcripts (less reliable).
 - **`export_urls.py`** — Exports video URLs to CSV.
+- **`logger.py`** — Centralized logging (console + rotating `logs/app.log`).
 - **`requirements.txt`** — Python project dependencies.
 - **`.env.local`** — API keys configuration.
-- **`frontend/`** — React + Vite frontend application.
-  - `src/App.jsx` — Main app component (search, chat, dataset sidebar).
-  - `vite.config.js` — Vite config with API proxy to backend.
+- **`frontend/ui/`** — Next.js frontend application.
+  - `app/page.tsx` — Main app component (search console + chat view, datasets sidebar).
+  - `app/globals.css` — New design system / styling.
+  - `app/api/[...path]/route.ts` — Proxies `/api` to the backend (long timeout).
+  - `next.config.mjs` — Next.js config.
 
+## 🛠️ Troubleshooting
 
-  Cmd + Shift + V
+- **"Backend returned empty response (HTTP 502)"** — the backend isn't running. Start it with `./start.sh` (or `./myenv/bin/python api.py`).
+- **Search returns "No videos found from YouTube Search."** — the YouTube Data API key is invalid or **YouTube Data API v3 isn't enabled** for the project. Enable the API / create a fresh key (and restart the backend afterward).
+- **`address already in use` on port 8000** — a stale backend is still bound to the port. The launcher clears it automatically, or run `lsof -ti tcp:8000 | xargs kill -9`.
+- **Startup crash with `ImportError` (tokenizers/transformers)** — you launched with the wrong interpreter. Use `./myenv/bin/python api.py`, not `venv`.
+- **Chat returns an OpenAI error** — verify the `OPENAI_API_KEY` and that the model id (`gpt-5-mini`) is valid for your account.
