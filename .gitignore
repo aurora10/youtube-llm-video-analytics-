@@ -30,6 +30,7 @@ myenv/
 logs/
 
 # Project Specific
+.pnpm-store/
 chroma_db/
 OUTPUT/
 llm_data/
