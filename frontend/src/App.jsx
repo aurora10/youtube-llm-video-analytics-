@@ -62,18 +62,27 @@ function App() {
 
   const handleDelete = async (filename, e) => {
     e.stopPropagation()
-    const name = filename.replace('_chunked.jsonl', '')
-    if (!confirm(`Delete "${name}"?`)) return
+    // Delete immediately — no confirmation popup.
+    // Optimistic UI: drop it from the sidebar right away for instant feedback.
+    setDatasets(prev => prev.filter(v => v.filename !== filename))
+    // Clear the locally-persisted conversation for this dataset.
+    setChatHistory(prev => {
+      if (!prev[filename]) return prev
+      const next = { ...prev }
+      delete next[filename]
+      return next
+    })
+    if (selectedFilename === filename) {
+      setSelectedFilename('')
+      setChatVideoTitle('')
+    }
     try {
       await fetch(`${API_BASE}/videos/${encodeURIComponent(filename)}`, { method: 'DELETE' })
-      if (selectedFilename === filename) {
-        setSelectedFilename('')
-        setChatVideoTitle('')
-      }
-      fetchDatasets()
     } catch (err) {
       alert("Delete Error: " + err.message)
     }
+    // Flash / re-sync the backend's history list so the sidebar is authoritative.
+    fetchDatasets()
   }
 
   const handleClearSearch = () => {
@@ -238,111 +247,110 @@ function App() {
   }
 
   return (
-    <div style={{ display: 'flex', gap: '2rem', height: '90vh' }}>
+    <div className="app-shell">
 
-      {/* Sidebar */}
-      <div className="glass-panel" style={{ width: '300px', padding: '1rem', display: 'flex', flexDirection: 'column' }}>
-        <h2 className="text-neon-cyan" style={{ margin: '0 0 1rem 0' }}>YT Deep Search</h2>
+      {/* ---- Sidebar ---- */}
+      <aside className="panel panel-side">
+        <div className="brand">
+          <div className="brand-mark">▶</div>
+          <div>
+            <div className="brand-title">YT Deep Search</div>
+            <div className="brand-sub">Video Intelligence</div>
+          </div>
+        </div>
 
-        <button className="btn-neon" onClick={() => { localStorage.removeItem('yt-search-state'); setActiveTab('search') }} style={{ marginBottom: '1rem', width: '100%' }}>
-          + New Search
+        <button
+          className={`btn ${activeTab === 'chat' ? 'btn-back' : 'btn-primary'} btn-block`}
+          onClick={() => { localStorage.removeItem('yt-search-state'); setActiveTab('search') }}
+        >
+          {activeTab === 'chat' ? (
+            <><span>←</span> Back to search</>
+          ) : (
+            <><span>+</span> New Search</>
+          )}
         </button>
 
-        <div style={{ flex: 1, overflowY: 'auto' }}>
-          <h3 style={{ color: '#888', fontSize: '0.9rem', textTransform: 'uppercase', marginBottom: '0.5rem' }}>
-            Analyzed Videos
-          </h3>
+        <div className="sidebar-scroll">
+          <h3 className="section-label" style={{ marginTop: '1.5rem' }}>Analyzed Videos</h3>
           {datasets.length === 0 && (
-            <p style={{ color: '#555', fontSize: '0.9rem' }}>No analyzed videos yet.</p>
+            <p className="empty-note">No analyzed videos yet.</p>
           )}
-          {datasets.map(v => (
-            <div
-              key={v.filename}
-              onClick={() => selectAnalyzedVideo(v)}
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: '0.8rem',
-                margin: '0.5rem 0',
-                backgroundColor: selectedFilename === v.filename ? 'rgba(0, 255, 255, 0.1)' : 'rgba(255,255,255,0.02)',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                borderLeft: selectedFilename === v.filename ? '4px solid #00ffff' : '4px solid transparent',
-                transition: 'all 0.2s'
-              }}
-            >
-              <div style={{ fontWeight: '500', fontSize: '0.85rem', wordBreak: 'break-word' }}>{v.name}</div>
-              <button
-                onClick={(e) => handleDelete(v.filename, e)}
-                style={{
-                  background: 'none', border: 'none', color: '#ff4444', cursor: 'pointer',
-                  fontSize: '1.1rem', padding: '0 0.3rem', lineHeight: 1, opacity: 0.6,
-                  transition: 'opacity 0.2s', flexShrink: 0, marginLeft: '0.3rem',
-                }}
-                onMouseEnter={e => e.currentTarget.style.opacity = '1'}
-                onMouseLeave={e => e.currentTarget.style.opacity = '0.6'}
-                title="Delete dataset"
-              >🗑️</button>
-            </div>
-          ))}
+          <div className="dataset-list">
+            {datasets.map(v => (
+              <div
+                key={v.filename}
+                onClick={() => selectAnalyzedVideo(v)}
+                className={`dataset-item${selectedFilename === v.filename ? ' active' : ''}`}
+              >
+                <div className="dataset-name">{v.name}</div>
+                <button
+                  className="icon-btn"
+                  onClick={(e) => handleDelete(v.filename, e)}
+                  title="Delete dataset"
+                  aria-label={`Delete ${v.name}`}
+                >🗑️</button>
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
+      </aside>
 
-      {/* Main Area */}
-      <div className="glass-panel" style={{ flex: 1, padding: '2rem', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* ---- Main Area ---- */}
+      <main className="panel panel-main">
 
         {activeTab === 'search' && (
-          <div style={{ maxWidth: '800px', margin: '0 auto', width: '100%', overflowY: 'auto', paddingBottom: '2rem' }}>
-            <h1 style={{ marginBottom: '2rem', fontSize: '2rem' }}>New Deep Search</h1>
-            <form onSubmit={handleSearch} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-              <div>
-                <label style={{ display: 'block', marginBottom: '0.5rem', color: '#aaa', fontSize: '0.9rem' }}>Keyword / Prompt</label>
+          <div className="search-scroll tab-fade">
+            <div className="search-head">
+              <h1 className="search-title">New Deep Search</h1>
+              <p className="search-sub">Find videos beyond the recommendation algorithm and analyze their transcripts.</p>
+            </div>
+
+            <form onSubmit={handleSearch} className="form-grid">
+              <div className="field">
+                <label className="field-label">Keyword / Prompt</label>
                 <input
                   type="text"
-                  className="input-glass"
+                  className="input"
                   value={keyword}
                   onChange={e => setKeyword(e.target.value)}
                   placeholder="Enter topic to research..."
                   required
                 />
               </div>
-              <div style={{ display: 'flex', gap: '1rem' }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{ display: 'block', marginBottom: '0.5rem', color: '#aaa', fontSize: '0.9rem' }}>Language</label>
-                  <select className="input-glass select-glass" value={lang} onChange={e => setLang(e.target.value)}>
+
+              <div className="form-grid-4">
+                <div className="field">
+                  <label className="field-label">Language</label>
+                  <select className="select" value={lang} onChange={e => setLang(e.target.value)}>
                     <option value="en">English (en)</option>
                     <option value="es">Spanish (es)</option>
                     <option value="ru">Russian (ru)</option>
                   </select>
                 </div>
-                <div style={{ flex: 1 }}>
-                  <label style={{ display: 'block', marginBottom: '0.5rem', color: '#aaa', fontSize: '0.9rem' }}>Max Videos</label>
+                <div className="field">
+                  <label className="field-label">Max Videos</label>
                   <input
                     type="number"
-                    className="input-glass"
+                    className="input"
                     value={maxVideos}
                     onChange={e => setMaxVideos(e.target.value)}
                     min="1" max="100"
                   />
                 </div>
-              </div>
-
-              <div style={{ display: 'flex', gap: '1rem' }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{ display: 'block', marginBottom: '0.5rem', color: '#aaa', fontSize: '0.9rem' }}>Published After</label>
+                <div className="field">
+                  <label className="field-label">Published After</label>
                   <input
                     type="date"
-                    className="input-glass"
+                    className="input"
                     value={publishedAfter}
                     onChange={e => setPublishedAfter(e.target.value)}
                   />
                 </div>
-                <div style={{ flex: 1 }}>
-                  <label style={{ display: 'block', marginBottom: '0.5rem', color: '#aaa', fontSize: '0.9rem' }}>Published Before</label>
+                <div className="field">
+                  <label className="field-label">Published Before</label>
                   <input
                     type="date"
-                    className="input-glass"
+                    className="input"
                     value={publishedBefore}
                     onChange={e => setPublishedBefore(e.target.value)}
                   />
@@ -350,44 +358,33 @@ function App() {
               </div>
 
               {loadingSearch ? (
-                <div style={{ textAlign: 'center', marginTop: '2rem' }}>
+                <div className="loading-center">
                   <div className="spinner"></div>
-                  <p className="text-neon-cyan">Searching YouTube...</p>
+                  <p style={{ color: 'var(--text-muted)' }}>Searching YouTube...</p>
                 </div>
               ) : (
-                <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
-                  <button type="submit" className="btn-neon" style={{ padding: '1rem', flex: 1 }}>SEARCH</button>
-                  <button
-                    type="button"
-                    className="btn-neon"
-                    onClick={handleClearSearch}
-                    style={{
-                      padding: '1rem',
-                      flex: 1,
-                      borderColor: '#888',
-                      color: '#888',
-                      boxShadow: 'inset 0 0 0.4em 0 #888, 0 0 0.4em 0 #888',
-                    }}
-                  >
-                    CLEAR
-                  </button>
+                <div className="form-actions">
+                  <button type="submit" className="btn btn-primary">Search</button>
+                  <button type="button" className="btn btn-ghost" onClick={handleClearSearch}>Clear</button>
                 </div>
               )}
             </form>
 
             {/* Search Results: Video Thumbnails with Analyze Buttons */}
             {searchResults && !loadingSearch && (
-              <div style={{ marginTop: '2rem', borderTop: '1px solid rgba(255,255,255,0.15)', paddingTop: '1.5rem' }}>
-                <div style={{ marginBottom: '1.5rem' }}>
-                  <h3 style={{ margin: 0, color: '#00ffff', fontSize: '1.2rem' }}>
-                    📊 Found {searchResults.videos_found} videos for "{searchResults.keyword}"
-                  </h3>
-                  <p style={{ color: '#888', fontSize: '0.85rem', margin: '0.3rem 0 0 0' }}>
-                    Click <span style={{ color: '#00ffff' }}>Analyze</span> on a video to download & index its transcript.
-                  </p>
+              <div className="results">
+                <div className="results-head">
+                  <div>
+                    <h3>
+                      <span className="accent">📊</span> Found {searchResults.videos_found} videos for "{searchResults.keyword}"
+                    </h3>
+                    <p className="results-sub">
+                      Click <span style={{ color: 'var(--accent-3)' }}>Analyze</span> on a video to download & index its transcript.
+                    </p>
+                  </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: '0.8rem' }}>
+                <div className="results-grid">
                   {searchResults.video_details.map(v => {
                     const vid = v.video_id
                     const isAnalyzed = analyzedVideos[vid]
@@ -397,126 +394,78 @@ function App() {
                     return (
                       <div
                         key={vid}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.8rem',
-                          padding: '0.7rem',
-                          borderRadius: '10px',
-                          backgroundColor: isAnalyzed ? 'rgba(0,255,0,0.06)' : 'rgba(255,255,255,0.02)',
-                          border: isAnalyzed ? '1px solid rgba(0,255,0,0.3)' : '1px solid rgba(255,255,255,0.08)',
-                          transition: 'all 0.2s',
-                        }}
+                        className={`result-card${isAnalyzed ? ' is-analyzed' : ''}`}
                       >
                         {/* Thumbnail */}
                         {v.thumbnail_url ? (
-                          <img
-                            src={v.thumbnail_url}
-                            alt=""
-                            style={{
-                              width: '120px', height: '68px', borderRadius: '6px',
-                              objectFit: 'cover', flexShrink: 0,
-                            }}
-                          />
+                          <img src={v.thumbnail_url} alt="" className="thumb" />
                         ) : (
-                          <div style={{
-                            width: '120px', height: '68px', borderRadius: '6px',
-                            backgroundColor: 'rgba(255,255,255,0.05)', flexShrink: 0,
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            fontSize: '1.5rem',
-                          }}>▶</div>
+                          <div className="thumb-fallback">▶</div>
                         )}
 
-                        {/* Info */}
-                        <div style={{ minWidth: 0, flex: 1 }}>
+                        {/* Info — title gets the full remaining width; button sits below */}
+                        <div className="result-info">
                           <a
                             href={`https://www.youtube.com/watch?v=${vid}`}
                             target="_blank"
                             rel="noreferrer"
-                            style={{
-                              fontWeight: 600, fontSize: '0.85rem', color: '#ddd',
-                              textDecoration: 'none', display: 'block',
-                              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                              marginBottom: '0.2rem',
-                            }}
-                            onMouseEnter={e => e.currentTarget.style.color = '#00ffff'}
-                            onMouseLeave={e => e.currentTarget.style.color = '#ddd'}
+                            className="result-title"
+                            title={v.title || vid}
                           >
                             {v.title || vid}
                           </a>
-                          <div style={{ fontSize: '0.7rem', color: '#888' }}>{v.published_date?.slice(0, 10)}</div>
-                        </div>
-
-                        {/* Inline error message */}
-                        {isError && analyzeErrors[vid] && (
-                          <div style={{
-                            marginTop: '0.4rem',
-                            padding: '0.5rem 0.7rem',
-                            borderRadius: '6px',
-                            fontSize: '0.75rem',
-                            lineHeight: 1.4,
-                            backgroundColor: analyzeErrors[vid].type === 'no_transcript'
-                              ? 'rgba(0, 255, 200, 0.06)'
-                              : 'rgba(255, 80, 80, 0.06)',
-                            borderLeft: analyzeErrors[vid].type === 'no_transcript'
-                              ? '3px solid rgba(0, 255, 200, 0.5)'
-                              : '3px solid rgba(255, 80, 80, 0.5)',
-                            color: analyzeErrors[vid].type === 'no_transcript' ? '#7fccb7' : '#cc8888',
-                          }}>
-                            {analyzeErrors[vid].type === 'no_transcript' ? 'ℹ️ ' : '⚠️ '}
-                            {analyzeErrors[vid].detail}
+                          <div className="result-meta">
+                            <span>{v.published_date?.slice(0, 10)}</span>
                           </div>
-                        )}
 
-                        {/* Analyze Button */}
-                        {isAnalyzed ? (
-                          <button
-                            className="btn-neon"
-                            style={{
-                              padding: '0.4em 1em', fontSize: '0.8rem',
-                              borderColor: '#39ff14', color: '#39ff14',
-                              boxShadow: 'inset 0 0 0.4em 0 #39ff14, 0 0 0.4em 0 #39ff14',
-                              whiteSpace: 'nowrap', flexShrink: 0,
-                            }}
-                            onClick={() => {
-                              setSelectedFilename(isAnalyzed.filename)
-                              setChatVideoTitle(isAnalyzed.title)
-                              setChatHistory({})
-                              setActiveTab('chat')
-                            }}
-                          >
-                            ✅ Chat
-                          </button>
-                        ) : isError ? (
-                          <button
-                            className="btn-neon"
-                            style={{
-                              padding: '0.4em 1em', fontSize: '0.8rem',
-                              borderColor: '#ff5555', color: '#ff5555',
-                              whiteSpace: 'nowrap', flexShrink: 0,
-                            }}
-                            onClick={() => handleAnalyze(vid, v.title)}
-                          >
-                            {analyzeErrors[vid]?.type === 'no_transcript' ? '🔍 Analyze' : '❌ Retry'}
-                          </button>
-                        ) : (
-                          <button
-                            className="btn-neon"
-                            style={{
-                              padding: '0.4em 1em', fontSize: '0.8rem',
-                              whiteSpace: 'nowrap', flexShrink: 0,
-                            }}
-                            onClick={() => handleAnalyze(vid, v.title)}
-                            disabled={isAnalyzing}
-                          >
-                            {isAnalyzing ? (
-                              <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                                <span className="spinner" style={{ width: '14px', height: '14px', borderWidth: '2px', margin: 0 }}></span>
-                                ...
-                              </span>
-                            ) : '🔍 Analyze'}
-                          </button>
-                        )}
+                          {/* Inline error message */}
+                          {isError && analyzeErrors[vid] && (
+                            <div className={`alert-inline ${analyzeErrors[vid].type === 'no_transcript' ? 'info' : 'warn'}`}>
+                              <span>{analyzeErrors[vid].type === 'no_transcript' ? 'ℹ️' : '⚠️'}</span>
+                              <span>{analyzeErrors[vid].detail}</span>
+                            </div>
+                          )}
+
+                          {/* Analyze Button */}
+                          <div className="result-actions">
+                            {isAnalyzed ? (
+                              <button
+                                className="btn btn-success"
+                                style={{ padding: '0.45rem 0.7rem', fontSize: '0.78rem' }}
+                                onClick={() => {
+                                  setSelectedFilename(isAnalyzed.filename)
+                                  setChatVideoTitle(isAnalyzed.title)
+                                  setChatHistory({})
+                                  setActiveTab('chat')
+                                }}
+                              >
+                                ✅ Chat
+                              </button>
+                            ) : isError ? (
+                              <button
+                                className="btn btn-danger"
+                                style={{ padding: '0.45rem 0.7rem', fontSize: '0.78rem' }}
+                                onClick={() => handleAnalyze(vid, v.title)}
+                              >
+                                {analyzeErrors[vid]?.type === 'no_transcript' ? '🔍 Analyze' : '❌ Retry'}
+                              </button>
+                            ) : (
+                              <button
+                                className="btn btn-tonal"
+                                style={{ padding: '0.45rem 0.7rem', fontSize: '0.78rem' }}
+                                onClick={() => handleAnalyze(vid, v.title)}
+                                disabled={isAnalyzing}
+                              >
+                                {isAnalyzing ? (
+                                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                    <span className="spinner inline"></span>
+                                    Analyzing
+                                  </span>
+                                ) : '🔍 Analyze'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
                       </div>
                     )
                   })}
@@ -527,21 +476,24 @@ function App() {
         )}
 
         {activeTab === 'chat' && (
-          <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-            <h2 style={{ margin: 0, paddingBottom: '1rem', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between' }}>
-              <span>
-                Chat: <span className="text-neon-cyan">
-                  {chatVideoTitle || selectedFilename.replace('_chunked.jsonl', '')}
+          <div className="chat-col tab-fade">
+            <div className="chat-head">
+              <h2 className="chat-head-title">
+                <span>💬</span>
+                <span>
+                  Chat: <span className="accent" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {chatVideoTitle || selectedFilename.replace('_chunked.jsonl', '')}
+                  </span>
                 </span>
-              </span>
+              </h2>
               {!selectedFilename && (
-                <span style={{ fontSize: '0.85rem', color: '#ff5555' }}>Select an analyzed video from the sidebar</span>
+                <span className="chat-head-hint">Select an analyzed video from the sidebar</span>
               )}
-            </h2>
+            </div>
 
-            <div style={{ flex: 1, overflowY: 'auto', padding: '1rem 0', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            <div className="chat-scroll">
               {!selectedFilename || !chatHistory[selectedFilename]?.length ? (
-                <p style={{ color: '#555', textAlign: 'center', marginTop: '2rem' }}>
+                <p className="chat-empty">
                   {selectedFilename
                     ? 'Ask a question about this video transcript.'
                     : 'Analyze a video first, then come back to chat.'}
@@ -549,24 +501,16 @@ function App() {
               ) : null}
 
               {(chatHistory[selectedFilename] || []).map((msg, i) => (
-                <div key={i} style={{
-                  alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                  backgroundColor: msg.role === 'user' ? 'rgba(255,255,255,0.1)' : 'rgba(0,255,255,0.05)',
-                  border: msg.role === 'ai' ? '1px solid rgba(0,255,255,0.2)' : 'none',
-                  padding: '1.5rem',
-                  borderRadius: '12px',
-                  maxWidth: '80%',
-                  boxShadow: msg.role === 'ai' ? '0 0 15px rgba(0,255,255,0.05)' : 'none'
-                }}>
-                  <div style={{ fontSize: '0.8rem', color: msg.role === 'user' ? '#ccc' : '#00ffff', marginBottom: '0.8rem', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                <div key={i} className={`msg ${msg.role === 'user' ? 'user' : 'ai'}`}>
+                  <div className="msg-role">
                     {msg.role === 'user' ? 'You' : 'AI Assistant'}
                   </div>
-                  <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6' }}>{msg.text}</div>
+                  <div className="msg-body">{msg.text}</div>
 
                   {msg.sources && msg.sources.length > 0 && (
-                    <div style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid rgba(0,255,255,0.1)' }}>
-                      <div style={{ fontSize: '0.8rem', color: '#00ffff', marginBottom: '0.8rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Sources:</div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    <div className="msg-sources">
+                      <div className="msg-sources-label">Sources:</div>
+                      <div className="msg-sources-list">
                         {Array.from(new Set(msg.sources.map(s => s.video_id))).map(vid => {
                           const source = msg.sources.find(s => s.video_id === vid)
                           return (
@@ -576,9 +520,8 @@ function App() {
                               target="_blank"
                               rel="noreferrer"
                               className="video-link"
-                              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}
                             >
-                              <span style={{ fontSize: '0.7rem' }}>▶</span> {source?.title || `Video ${vid}`}
+                              <span className="play">▶</span> {source?.title || `Video ${vid}`}
                             </a>
                           )
                         })}
@@ -587,24 +530,29 @@ function App() {
                   )}
                 </div>
               ))}
-              {loadingChat && <div className="spinner" style={{ width: '24px', height: '24px', borderWidth: '2px', alignSelf: 'flex-start', margin: '0 0 0 1rem' }}></div>}
+              {loadingChat && <div className="spinner inline" style={{ alignSelf: 'flex-start', margin: '0 0 0 1rem' }}></div>}
             </div>
 
-            <form onSubmit={handleChat} style={{ display: 'flex', gap: '1rem', marginTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '1rem' }}>
+            <form onSubmit={handleChat} className="chat-composer">
               <input
                 type="text"
-                className="input-glass"
+                className="input"
                 value={query}
                 onChange={e => setQuery(e.target.value)}
                 placeholder={selectedFilename ? "Chat with video data..." : "Select a video first..."}
                 disabled={loadingChat || !selectedFilename}
-                style={{ padding: '1rem' }}
               />
-              <button type="submit" className="btn-neon" disabled={loadingChat || !selectedFilename} style={{ padding: '0 2rem' }}>SEND</button>
+              <button
+                type="submit"
+                className="chat-send"
+                disabled={loadingChat || !selectedFilename}
+              >
+                Send
+              </button>
             </form>
           </div>
         )}
-      </div>
+      </main>
     </div>
   )
 }

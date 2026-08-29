@@ -132,6 +132,10 @@ async def api_search(req: SearchRequest):
             "video_details": video_details,
         }
 
+    except HTTPException:
+        # Re-raise 4xx errors (e.g. "No videos found") cleanly instead of
+        # letting the generic handler rewrap them as a 500 with a mangled detail.
+        raise
     except Exception as e:
         logger.exception("Search failed: keyword=%s", req.keyword)
         raise HTTPException(status_code=500, detail=str(e))
@@ -156,7 +160,12 @@ async def api_analyze(req: AnalyzeRequest):
         # 2. Chunk the transcript
         chunks = chunk_text(transcript_text, MAX_WORDS_PER_CHUNK, OVERLAP_WORDS)
 
-        # 3. Save chunked data
+        # 3. Build ChromaDB collection name (kept in sync with delete_video)
+        collection_name = clean_filename(f"{req.video_id}_{req.lang}")[:63]
+        if len(collection_name) < 3:
+            collection_name = f"collection_{collection_name}".ljust(3, '_')
+
+        # 4. Save chunked data (embed collection_name so delete_video can find it)
         os.makedirs(OUTPUT_FOLDER, exist_ok=True)
         safe_title = clean_filename(req.title or req.video_id)
         chunked_filename = f"{safe_title}_{req.video_id}_chunked.jsonl"
@@ -171,6 +180,7 @@ async def api_analyze(req: AnalyzeRequest):
                     "title": req.title or "N/A",
                     "published_date": "N/A",
                     "transcript_language": actual_lang if actual_lang else req.lang,
+                    "collection_name": collection_name,
                     "chunk_id": i + 1,
                     "total_chunks": len(chunks),
                     "chunk_text": chunk_content,
@@ -178,11 +188,7 @@ async def api_analyze(req: AnalyzeRequest):
                 json.dump(entry, outfile, ensure_ascii=False)
                 outfile.write('\n')
 
-        # 4. Build ChromaDB index
-        collection_name = clean_filename(f"{req.video_id}_{req.lang}")[:63]
-        if len(collection_name) < 3:
-            collection_name = f"collection_{collection_name}".ljust(3, '_')
-
+        # 5. Build ChromaDB index
         build_or_load_index(chunked_filepath, collection_name)
 
         logger.info(
@@ -208,9 +214,19 @@ async def api_analyze(req: AnalyzeRequest):
 async def delete_video(filename: str):
     """Deletes a processed dataset: chunked file, raw file, and ChromaDB collection."""
     try:
-        # 1. Delete chunked file from OUTPUT folder
+        # 1. Delete chunked file from OUTPUT folder, capturing the collection
+        # name embedded during /api/analyze so its ChromaDB index can be removed.
         chunked_path = os.path.join(OUTPUT_FOLDER, filename)
+        collection_name = None
         if os.path.exists(chunked_path):
+            try:
+                with open(chunked_path, 'r', encoding='utf-8') as cf:
+                    first_line = cf.readline()
+                embedded = json.loads(first_line).get("collection_name")
+                if embedded:
+                    collection_name = embedded
+            except Exception:
+                pass
             os.remove(chunked_path)
 
         # 2. Derive raw filename (remove _chunked suffix) and delete from llm_data
@@ -228,14 +244,12 @@ async def delete_video(filename: str):
                         os.remove(os.path.join(BASE_OUTPUT_FOLDER, f))
                         break
 
-        # 3. Delete ChromaDB collection
-        # The collection name matches what was set in /api/search:
-        #   clean_filename(req.keyword)[:63]
-        # The chunked filename is clean_filename(keyword) + .jsonl_chunked.jsonl
-        # So base_name (without _chunked.jsonl) == the collection name
-        collection_name = base_name[:63]
-        if len(collection_name) < 3:
-            collection_name = f"collection_{collection_name}".ljust(3, "_")
+        # 3. Delete ChromaDB collection. Prefer the embedded name captured
+        # above; fall back to the legacy derivation from the chunked base name.
+        if not collection_name:
+            collection_name = base_name[:63]
+            if len(collection_name) < 3:
+                collection_name = f"collection_{collection_name}".ljust(3, "_")
 
         try:
             chroma_client.delete_collection(collection_name)
@@ -270,7 +284,13 @@ async def api_chat(req: ChatRequest):
         if collection.count() == 0:
             filepath = os.path.join(OUTPUT_FOLDER, req.filename)
             collection = build_or_load_index(filepath, collection_name)
-            
+
+        if collection is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No indexed transcript found for '{req.filename}'."
+            )
+
         answer, sources = query_rag_system(req.query, collection)
         
         logger.info("Chat query: filename=%s, query='%s'", req.filename, req.query[:100])
@@ -278,6 +298,8 @@ async def api_chat(req: ChatRequest):
             "answer": answer,
             "sources": sources
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Chat failed: filename=%s, query='%s'", req.filename, req.query[:100])
         raise HTTPException(status_code=500, detail=str(e))

@@ -140,3 +140,6 @@ python rag_processor.py --file OUTPUT/your_file_chunked.jsonl
 - **`frontend/`** — React + Vite frontend application.
   - `src/App.jsx` — Main app component (search, chat, dataset sidebar).
   - `vite.config.js` — Vite config with API proxy to backend.
+
+
+  Cmd + Shift + V
